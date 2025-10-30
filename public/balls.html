@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>傾けて転がすチェックポイントレース (固定カメラ)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.3/socket.io.js"></script>
+    <style>
+      /* 元のコードのレイアウトを維持 */
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: sans-serif;
+      }
+      canvas {
+        display: block;
+        margin-top: 20px;
+        border: 1px solid #ccc;
+      }
+      #status-info {
+        margin-top: 10px;
+        font-size: 1.1em;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>スマホからのセンサ情報を受信</h1>
+    <div>
+      <div>あなたのID: <span id="myid"></span></div>
+      <button id="connect">ルームに入る</button>
+      <div>受信した情報はコンソールログで確認してください</div>
+      <div id="status-info">
+        **チェックポイント: <span id="checkpoint-count">0</span> / 5**
+        <br>
+        **タイム: <span id="gameTime">0.000</span>s**
+      </div>
+      <div id="message" style="color: red; font-weight: bold;"></div>
+    </div>
+    <script>
+      let socket = io.connect();
+
+      let btn = document.querySelector("#connect");
+      let b = 0; // beta (ピッチ角)
+      let g = 0; // gamma (ロール角)
+
+      let myid = sessionStorage.getItem('clientId');
+      if (!myid) {
+        myid = Math.random().toString(36).substring(2, 15);
+        sessionStorage.setItem('clientId', myid);
+      }
+      
+      document.querySelector("#myid").innerHTML = myid;
+      console.log("あなたのID: ", myid);
+
+      btn.addEventListener("click", function () {
+        socket.emit("join", "game");
+        btn.remove();
+        document.querySelector("#message").innerHTML = "🎮 **レーススタート！** 最初のチェックポイントを目指せ！";
+        startGame();
+      });
+    
+      socket.on("sensor", function (data) {
+        g = parseFloat(data.g);
+        b = parseFloat(data.b);
+        console.log(data); // 元のコードの通りコンソールログに出力
+      });
+
+      // --- Game Variables ---
+      let x = 0; // ボールX座標
+      let y = 0; // ボールY座標
+      let r = 40; // ボール半径
+      let speed = 0.3; // ボール速度調整
+      let plate_size = 800; // キャンバスサイズ/板のサイズ
+      
+      let checkpoints = []; // チェックポイント座標の配列
+      let currentCheckpoint = 0; // 現在目指すべきチェックポイントのインデックス
+      let target_radius = 50; // ターゲットの半径
+      
+      let barriers = []; // 障害物座標の配列
+
+      let is_playing = false;
+      let startTime = 0;
+      let elapsedTime = 0;
+      
+      function setupBarriers() {
+          // 3つのランダムな障害物（柱）を設定
+          barriers = [];
+          const half_size = (plate_size / 2) - 100;
+          for (let i = 0; i < 3; i++) {
+              barriers.push({
+                  x: random(-half_size, half_size),
+                  y: random(-half_size, half_size)
+              });
+          }
+      }
+
+      function setupCheckpoints() {
+        // 5つのランダムなチェックポイントを設定 (画面中央付近を避ける)
+        checkpoints = [];
+        const half_size = (plate_size / 2) - 150;
+        for (let i = 0; i < 5; i++) {
+            checkpoints.push({
+                x: random(-half_size, half_size),
+                y: random(-half_size, half_size)
+            });
+        }
+      }
+
+      function startGame() {
+        setupCheckpoints();
+        setupBarriers(); 
+        x = 0;
+        y = 0;
+        currentCheckpoint = 0;
+        startTime = millis();
+        elapsedTime = 0;
+        is_playing = true;
+        document.querySelector("#checkpoint-count").innerHTML = `${currentCheckpoint} / ${checkpoints.length}`;
+        document.querySelector("#message").innerHTML = "🚀 **レース中...**";
+      }
+
+      function setup() {
+        createCanvas(plate_size, plate_size, WEBGL);
+        camera(0, 800, 100, 0, 0, 0, 0, 1, 0);
+        noStroke();
+      }
+
+      function draw() {
+        background(0);
+        orbitControl(); 
+
+        ambientLight(50, 50, 50);
+        directionalLight(100, 20, 20, -1, -1, -1);
+        pointLight(20, 20, 100, 0, 0, 800);
+
+        if (is_playing) {
+            // 時間計測
+            elapsedTime = millis() - startTime;
+            document.querySelector("#gameTime").innerHTML = (elapsedTime / 1000).toFixed(3);
+
+            // ボールの動き (元のコードのロジック)
+            x = x + speed * g;
+            y = y + speed * b;
+
+            // 画面外に出ないように制限
+            const half_size = plate_size / 2 - r;
+            x = constrain(x, -half_size, half_size);
+            y = constrain(y, -half_size, half_size);
+            
+            // 障害物との簡単な衝突判定 (減速効果)
+            const friction = 0.95; 
+            for (let bar of barriers) {
+                let dist_sq = (x - bar.x) * (x - bar.x) + (y - bar.y) * (y - bar.y);
+                if (dist_sq < (r + 20) * (r + 20)) { 
+                    // 衝突した場合、一時的にボールの移動を減速させる
+                    x = x * friction; 
+                    y = y * friction;
+                    break;
+                }
+            }
+
+
+            // チェックポイント衝突判定
+            if (currentCheckpoint < checkpoints.length) {
+                let target = checkpoints[currentCheckpoint];
+                let dist_sq = (x - target.x) * (x - target.x) + (y - target.y) * (y - target.y);
+                if (dist_sq < (r + target_radius) * (r + target_radius)) {
+                    // 衝突！次のチェックポイントへ
+                    currentCheckpoint++;
+                    document.querySelector("#checkpoint-count").innerHTML = `${currentCheckpoint} / ${checkpoints.length}`;
+                    
+                    if (currentCheckpoint === checkpoints.length) {
+                        // 全てのチェックポイントを通過してゴール
+                        is_playing = false;
+                        document.querySelector("#message").innerHTML = `🎉 **ゴール！** タイム: **${(elapsedTime / 1000).toFixed(3)}s**<br>クリックでリトライ！`;
+                    } else {
+                        document.querySelector("#message").innerHTML = `✅ ${currentCheckpoint}ポイント通過！次へ！`;
+                    }
+                }
+            }
+        }
+
+        // --- 板の動き (元のコードのロジックを維持) ---
+        push();
+        rotateX((-PI * b) / 180);
+        rotateY((PI * g) / 180);
+        translate(0, 0, -50); 
+        specularMaterial(50, 50, 150);
+        box(plate_size, plate_size, 30);
+        pop();
+
+        // --- ボールの動き (元のコードのロジックを維持) ---
+        push();
+        let z_offset = -x * sin((PI * g) / 180) - y * sin((PI * b) / 180);
+        translate(x, y, z_offset + r / 2); 
+        specularMaterial(200, 200, 50);
+        sphere(r);
+        pop();
+
+        // --- 障害物の描画 (板と一緒に回転) ---
+        // ★ここを修正しました★
+        for (let bar of barriers) {
+            push();
+            // 板と一緒に回転させる
+            rotateX((-PI * b) / 180); 
+            rotateY((PI * g) / 180);  
+            // translateのZ座標を柱の半分の高さ(40)に設定し、Z=0の板から垂直に立つようにする
+            translate(bar.x, bar.y, 40); 
+            specularMaterial(150, 150, 150); 
+            cylinder(20, 80); // 半径20、高さ80
+            // 前回あった rotateX(PI / 2); は削除し、円柱が垂直になるようにする
+            pop();
+        }
+
+        // --- チェックポイントの描画 (板と一緒に回転) ---
+        if (is_playing || currentCheckpoint === checkpoints.length) {
+            // 通過したチェックポイントを描画
+            for (let i = 0; i < currentCheckpoint; i++) {
+                let cp = checkpoints[i];
+                push();
+                rotateX((-PI * b) / 180); 
+                rotateY((PI * g) / 180);  
+                translate(cp.x, cp.y, 15); 
+                specularMaterial(50, 255, 50); 
+                rotateX(PI / 2);
+                cylinder(target_radius / 2, 30);
+                pop();
+            }
+
+            // 現在目指すべきチェックポイントを描画
+            if (currentCheckpoint < checkpoints.length) {
+                let target = checkpoints[currentCheckpoint];
+                push();
+                rotateX((-PI * b) / 180); 
+                rotateY((PI * g) / 180);  
+                translate(target.x, target.y, 15); 
+                specularMaterial(255, 50, 50); 
+                rotateX(PI / 2);
+                cylinder(target_radius, 30);
+                pop();
+            }
+        }
+      }
+
+      // クリックでリトライ
+      function mouseClicked() {
+        if (!is_playing && socket.connected) {
+          startGame();
+        }
+      }
+    </script>
+  </body>
+</html>
